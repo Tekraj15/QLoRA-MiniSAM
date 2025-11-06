@@ -1,0 +1,4 @@
+sam:
+  vit_h_checkpoint: "checkpoints/sam_vit_h_4b8939.pth"
+  vit_b_checkpoint: "checkpoints/sam_vit_b_01ec64.pth"
+  device: "cuda"
