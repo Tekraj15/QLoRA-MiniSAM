@@ -1,0 +1,15 @@
+defaults:
+  - data: cosmo
+  - model: sam
+  - eval: baseline
+  - _self_
+
+project:
+  name: "lora_minisam"
+  seed: 42
+
+paths:
+  root: $$ {oc.env:PROJECT_ROOT, $${hydra:runtime.cwd}}
+  data: ${paths.root}/data/cosmo1050k
+  checkpoints: ${paths.root}/checkpoints
+  outputs: ${paths.root}/outputs

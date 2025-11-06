@@ -1,0 +1,7 @@
+dataset:
+  name: "cosmo1050k"
+  split: "valid"          # or 'train', 'test'
+  modality: "CT"          # filter by filename
+  size: 1024
+  prompt_type: "box"
+  batch_size: 1
