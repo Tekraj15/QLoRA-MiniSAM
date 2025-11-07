@@ -38,16 +38,16 @@ Being Evaluated on the COSMOS-1050K benchmark [Huang et al., 2024], QLoRA-MiniSA
 
 ```mermaid
 flowchart TD
-    A[Input Image\n(1024×1024)] --> B[ViT-B Encoder\n(4-bit Quantized)]
-    B --> C[Image Features\n(256×64×64)]
+    A["Input Image\n(1024×1024)"] --> B["ViT-B Encoder\n(4-bit Quantized)"]
+    B --> C["Image Features\n(256×64×64)"]
     
-    D[Prompt\n(Box/Point)] --> E[Prompt Encoder]
+    D["Prompt\n(Box/Point)"] --> E[Prompt Encoder]
     E --> F[Prompt Tokens]
     
-    C --> G[Mask Decoder\n(2-layer Transformer)]
+    C --> G["Mask Decoder\n(2-layer Transformer)"]
     F --> G
-    G --> H[Mask Logits\n(3×1024×1024)]
-    H --> I[Final Mask\n(Sigmoid + Argmax)]
+    G --> H["Mask Logits\n(3×1024×1024)"]
+    H --> I["Final Mask\n(Sigmoid + Argmax)"]
 
     style B fill:#ffeb3b,stroke:#f57c00
     style G fill:#4caf50,stroke:#2e7d32
@@ -58,12 +58,12 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A[COSMOS Train Split] --> B[DataLoader]
-    B --> C[Teacher: ViT-H\n(Frozen)]
-    B --> D[Student: ViT-B\n(4-bit + LoRA)]
-    C --> E[Teacher Features + Mask]
-    D --> F[Student Features + Mask]
-    E & F --> G[Distillation Loss\n(Feat + Mask KL)]
-    G --> H[AdamW\n(lr=1e-4)]
+    A["COSMOS Train Split"] --> B["DataLoader"]
+    B --> C["Teacher: ViT-H\n(Frozen)"]
+    B --> D["Student: ViT-B\n(4-bit + LoRA)"]
+    C --> E["Teacher Features + Mask"]
+    D --> F["Student Features + Mask"]
+    E & F --> G["Distillation Loss\n(Feat + Mask KL)"]
+    G --> H["AdamW\n(lr=1e-4)"]
     H --> D
 ```
