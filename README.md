@@ -35,6 +35,7 @@ Being Evaluated on the COSMOS-1050K benchmark [Huang et al., 2024], QLoRA-MiniSA
 ## Detailed Methodology
 # 1. Architecture Overview
 
+
 ```mermaid
 flowchart TD
     A[Input Image\n(1024×1024)] --> B[ViT-B Encoder\n(4-bit Quantized)]
@@ -53,6 +54,8 @@ flowchart TD
 ```
 
 # 2. Training Workflow:
+
+
 ```mermaid
 flowchart LR
     A[COSMOS Train Split] --> B[DataLoader]
