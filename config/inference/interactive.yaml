@@ -1,0 +1,3 @@
+inference:
+  modality: "CT"
+  adapter_path: "checkpoints/qlora_CT_final.pt"
