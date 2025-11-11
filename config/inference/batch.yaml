@@ -1,0 +1,4 @@
+inference:
+  modality: "CT"
+  adapter_path: "checkpoints/qlora_CT_final.pt"
+  batch_size: 8
