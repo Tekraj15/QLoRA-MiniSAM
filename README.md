@@ -2,7 +2,7 @@
 
 ## Objective
 Develop **QLoRA-MiniSAM**, a **lightweight, 4-bit quantized**, and **LoRA-adapted** version of the Segment Anything Model (SAM)  tailored for medical image segmentation (MIS) by combining knowledge distillation from the original SAM with **ViT-H** into a compact **ViT-B encoder** and Low-Rank Adaptation (LoRA) for modality-specific fine-tuning, achieving near-SOTA zero-shot and few-shot segmentation performance (**≥90% of ViT-H’s Dice score**) on COSMOS-1050K while reducing:
-- **Inference latency**: **10–20×**
+- **Inference latency**: **~7×**
 - **Memory footprint**: **>90%**
 - **Training cost**: **>95%**
 
@@ -38,19 +38,31 @@ Being Evaluated on the COSMOS-1050K benchmark [Huang et al., 2024], QLoRA-MiniSA
 
 ```mermaid
 flowchart TD
-    A["Input Image<br/>(1024×1024)"] --> B["ViT-B Encoder<br/>(4-bit Quantized)"]
-    B --> C["Image Features<br/>(256×64×64)"]
-    
-    D["Prompt<br/>(Box/Point)"] --> E[Prompt Encoder]
-    E --> F[Prompt Tokens]
-    
-    C --> G["Mask Decoder<br/>(2-layer Transformer)"]
-    F --> G
-    G --> H["Mask Logits<br/>(3×1024×1024)"]
-    H --> I["Final Mask<br/>(Sigmoid + Argmax)"]
+    subgraph Input Processing
+    I["Input Image<br/>(1024×1024)"] --> P["Patch Embeddings"]
+    end
 
-    style B fill:#ffeb3b,stroke:#f57c00
-    style G fill:#4caf50,stroke:#2e7d32
+    subgraph QLoRA-MiniSAM Encoder
+    direction TB
+    W["Frozen Weights<br/>(4-bit NF4)"] --"De-quantize"--> M["MatMul (BF16)"]
+    L["LoRA Adapters<br/>(Trainable Rank r=8)"] --"Scale & Add"--> M
+    P --> M
+    M --> F["Transformer Blocks<br/>(12 Layers)"]
+    end
+
+    subgraph Lightweight Decoding
+    F --> E["Image Embeddings<br/>(64×64×256)"]
+    
+    U["User Prompts<br/>(Points/Boxes)"] --> PE["Prompt Encoder"]
+    
+    E --> D["Mask Decoder"]
+    PE --> D
+    D --> O["Segmentation Masks"]
+    end
+
+    style W fill:#ffeb3b,stroke:#fbc02d,stroke-width:2px
+    style L fill:#ff7043,stroke:#d84315,stroke-width:2px
+    style D fill:#66bb6a,stroke:#2e7d32,stroke-width:2px
 ```
 
 # 2. Training Workflow:
@@ -58,12 +70,17 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A["COSMOS Train Split"] --> B["DataLoader"]
-    B --> C["Teacher: ViT-H<br/>(Frozen)"]
-    B --> D["Student: ViT-B<br/>(4-bit + LoRA)"]
-    C --> E["Teacher Features + Mask"]
-    D --> F["Student Features + Mask"]
-    E & F --> G["Distillation Loss<br/>(Feat + Mask KL)"]
-    G --> H["AdamW<br/>(lr=1e-4)"]
-    H --> D
+    subgraph Phase 1: Knowledge Distillation
+    A["COSMOS Data"] --> B["Teacher: ViT-H<br/>(4-bit NF4 Frozen)"]
+    A --> C["Student: ViT-B<br/>(BF16 Dense Trainable)"]
+    B --"Embeddings"--> D["Loss Calculation"]
+    C --"Embeddings"--> D
+    D --> C
+    end
+    
+    subgraph Phase 2: QLoRA Fine-Tuning
+    C --> E["Distilled ViT-B<br/>(Frozen 4-bit NF4)"]
+    E --> F["+ LoRA Adapters<br/>(Trainable)"]
+    F --> G["Task Loss (Dice/Focal)"]
+    end
 ```
