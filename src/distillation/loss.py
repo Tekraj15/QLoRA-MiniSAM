@@ -11,18 +11,37 @@ class DistillationLoss(nn.Module):
         self.mse = nn.MSELoss()
         self.kld = nn.KLDivLoss(reduction="batchmean")
 
-    def forward(self, student_feat, teacher_feat, student_mask, teacher_mask):
-        # Feature alignment (L2 on normalized features)
-        s_feat = F.normalize(student_feat, dim=1)
-        t_feat = F.normalize(teacher_feat, dim=1)
-        feat_loss = self.mse(s_feat, t_feat)
+    def forward(self, student_outputs, teacher_outputs):
+        """
+        HuggingFace SamModel outputs return:
+        - iou_scores
+        - pred_masks
+        - vision_embedding (access this manually if not returned by default)
+        """
+        
+        # 1. Feature Distillation (Image Encoder Embeddings)
+        # Assume the trainer extracts the image embeddings (B, 256, 64, 64)
+        s_feat = student_outputs['vision_features']
+        t_feat = teacher_outputs['vision_features']
+        
+        # Normalize features for stability (Cosine Similarity via MSE)
+        s_feat_norm = F.normalize(s_feat, dim=1)
+        t_feat_norm = F.normalize(t_feat, dim=1)
+        feat_loss = self.mse(s_feat_norm, t_feat_norm)
 
-        # Mask logit distillation (soft labels)
-        s_logit = student_mask / self.T
-        t_logit = teacher_mask / self.T
+        # 2. Mask Distillation (Logits)
+        # Using the first mask (index 0) which is usually the most confident for unambiguous prompts
+        s_masks = student_outputs['pred_masks'][:, 0, :, :] # (B, H, W)
+        t_masks = teacher_outputs['pred_masks'][:, 0, :, :]
+
+        # Flatten for KL Div
+        B, H, W = s_masks.shape
+        s_logits = s_masks.view(B, -1) / self.T
+        t_logits = t_masks.view(B, -1) / self.T
+
         mask_loss = self.kld(
-            F.log_softmax(s_logit, dim=1),
-            F.softmax(t_logit, dim=1)
+            F.log_softmax(s_logits, dim=-1),
+            F.softmax(t_logits, dim=-1)
         ) * (self.T ** 2)
 
         return self.alpha * feat_loss + (1 - self.alpha) * mask_loss
