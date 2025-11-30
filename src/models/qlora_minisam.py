@@ -1,59 +1,59 @@
 # QLoRA Injection Module for MiniSAM
 import torch
 import torch.nn as nn
-from segment_anything import sam_model_registry
+from transformers import SamModel, BitsAndBytesConfig
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from transformers import BitsAndBytesConfig
 
 class QLoRAMiniSAM(nn.Module):
-    def __init__(self, cfg, modality="CT"):
+    def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.modality = modality
-
-        # 4-bit quantization
-        quant_cfg = BitsAndBytesConfig(
-            load_in_4bit=cfg.qlora.quantization.load_in_4bit,
-            bnb_4bit_quant_type=cfg.qlora.quantization.bnb_4bit_quant_type,
-            bnb_4bit_compute_dtype=getattr(torch, cfg.qlora.quantization.bnb_4bit_compute_dtype),
-            bnb_4bit_use_double_quant=cfg.qlora.quantization.bnb_4bit_use_double_quant,
+        
+        # 1. Define 4-bit NF4 Config (The "Q" in QLoRA)
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16
         )
 
-        # Load ViT-B with 4-bit
-        self.sam = sam_model_registry["vit_b"](
-            checkpoint=cfg.sam.vit_b_checkpoint,
-            quantization_config=quant_cfg
+        print(f"Loading Distilled Student from: {cfg.paths.distilled_checkpoint}")
+        
+        # 2. Load the DISTILLED Student; assuming it was saved using model.save_pretrained()
+        
+        self.model = SamModel.from_pretrained(
+            cfg.paths.distilled_checkpoint, # Path to your local best_student folder
+            quantization_config=bnb_config,
+            device_map=cfg.train.device
         )
 
-        # Prepare for QLoRA
-        self.sam = prepare_model_for_kbit_training(self.sam)
+        # 3. Prepare for k-bit training (freezes layers, casts layernorms to fp32)
+        self.model = prepare_model_for_kbit_training(self.model)
 
-        # LoRA config
-        lora_cfg = LoraConfig(
+        # 4. LoRA Config
+        # "q_proj", "v_proj" - HF SAM Attention layers
+        lora_config = LoraConfig(
             r=cfg.qlora.r,
             lora_alpha=cfg.qlora.alpha,
-            target_modules=cfg.qlora.target_modules,
+            target_modules=["q_proj", "v_proj"], 
             lora_dropout=cfg.qlora.dropout,
             bias="none",
-            modules_to_save=["mask_decoder"]
+            modules_to_save=["mask_decoder"] # fully fine-tune the decoder
         )
 
-        self.sam = get_peft_model(self.sam, lora_cfg)
-        self.sam.print_trainable_parameters()
+        # 5. Inject Adapters
+        self.model = get_peft_model(self.model, lora_config)
+        self.model.print_trainable_parameters()
 
-        # Freeze everything except LoRA
-        for name, param in self.sam.named_parameters():
-            if not ("lora" in name or "modules_to_save" in name):
-                param.requires_grad = False
-
-    def forward(self, image, prompt):
-        return self.sam(image, **prompt)
+    def forward(self, pixel_values, input_points=None, input_boxes=None, multimask_output=False):
+        # Pass directly to HF model
+        return self.model(
+            pixel_values=pixel_values, 
+            input_points=input_points,
+            input_boxes=input_boxes,
+            multimask_output=multimask_output
+        )
 
     def save_adapter(self, path):
-        self.sam.save_pretrained(path)
-
-    @classmethod
-    def load_adapter(cls, cfg, path, modality):
-        model = cls(cfg, modality)
-        model.sam.load_adapter(path)
-        return model
+        # Saves only the LoRA weights (few MBs)
+        self.model.save_pretrained(path)
