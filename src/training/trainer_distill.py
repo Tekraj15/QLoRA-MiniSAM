@@ -1,63 +1,125 @@
 # Training loop with teacher-student
 import torch
 import wandb
-from torch.utils.data import DataLoader
 from tqdm import tqdm
+from torch.utils.data import DataLoader
+from transformers import SamProcessor, SamModel, BitsAndBytesConfig
 from src.distillation.loss import DistillationLoss
 from src.utils.logger import init_wandb
 
 class DistillationTrainer:
-    def __init__(self, cfg, student, teacher, train_dataset):
+    def __init__(self, cfg, student_model, train_dataset):
         self.cfg = cfg
-        self.student = student.to(cfg.train.device)
-        self.teacher = teacher.to(cfg.train.device).eval()
-        self.criterion = DistillationLoss(alpha=cfg.train.feature_loss_weight)
+        self.device = cfg.train.device
+        
+        # 1. Setup Student (Dense, Trainable)
+        self.student = student_model.to(self.device)
+        self.student.train()
+
+        # 2. Setup Teacher (Frozen, 4-bit NF4), and ensure it uses the QLoRA memory saving trick
+        print("Loading Teacher (ViT-H) in 4-bit NF4...")
+        nf4_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16
+        )
+        self.teacher = SamModel.from_pretrained(
+            "facebook/sam-vit-huge",
+            quantization_config=nf4_config,
+            device_map=self.device
+        )
+        self.teacher.eval() # Freeze teacher
+
+        # 3. Processor (Handles resizing to 1024x1024 and Norm)
+        self.processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+
+        # 4. Optimization
+        self.criterion = DistillationLoss(
+            alpha=cfg.train.feature_loss_weight,
+            temperature=cfg.train.temperature
+        )
         self.optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.student.parameters()),
-            lr=cfg.train.lr,
-            weight_decay=cfg.train.weight_decay
+            self.student.parameters(),
+            lr=float(cfg.train.lr),
+            weight_decay=float(cfg.train.weight_decay)
         )
+        
         self.train_loader = DataLoader(
-            train_dataset, batch_size=cfg.train.batch_size, shuffle=True
+            train_dataset, 
+            batch_size=cfg.train.batch_size, 
+            shuffle=True,
+            collate_fn=self.collate_fn # Use custom collator if needed
         )
+        
         init_wandb(cfg)
 
     def train(self):
+        print("Starting Distillation Phase...")
+        
         for epoch in range(1, self.cfg.train.epochs + 1):
-            self.student.train()
             epoch_loss = 0.0
-            for i, batch in enumerate(tqdm(self.train_loader, desc=f"Epoch {epoch}")):
-                img = batch["image"].to(self.cfg.train.device)
-                prompt = batch["prompt"]
-                gt_mask = batch["mask"].to(self.cfg.train.device)
+            pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
+            
+            for batch in pbar:
+                # Prepare inputs using Processor (handles batching of lists)
+                # Assuming dataset returns raw images/points
+                inputs = self.processor(
+                    batch["image"], 
+                    input_points=batch["prompt"], 
+                    return_tensors="pt"
+                ).to(self.device)
 
-                # Teacher forward (no grad)
+                # --- Teacher Forward (Frozen) ---
                 with torch.no_grad():
-                    teacher_out = self.teacher(img, **prompt)
-                    teacher_mask = teacher_out[0]
-                    teacher_feat = self.teacher.get_image_features(img)
+                    t_outputs = self.teacher(
+                        pixel_values=inputs.pixel_values,
+                        input_points=inputs.input_points,
+                        multimask_output=False
+                    )
+                    # Explicitly get features if not in output (depends on HF version)
+                    t_features = self.teacher.vision_encoder(inputs.pixel_values).last_hidden_state
+                    
+                    teacher_pack = {
+                        'pred_masks': t_outputs.pred_masks,
+                        'vision_features': t_features
+                    }
 
-                # Student forward
-                student_out = self.student(img, **prompt)
-                student_mask = student_out[0]
-                student_feat = self.student.get_image_features(img)
+                # --- Student Forward (Trainable) ---
+                s_outputs = self.student.model(
+                    pixel_values=inputs.pixel_values,
+                    input_points=inputs.input_points,
+                    multimask_output=False
+                )
+                s_features = self.student.model.vision_encoder(inputs.pixel_values).last_hidden_state
+                
+                student_pack = {
+                    'pred_masks': s_outputs.pred_masks,
+                    'vision_features': s_features
+                }
 
-                # Loss
-                loss = self.criterion(student_feat, teacher_feat, student_mask, teacher_mask)
+                # --- Distillation Step ---
+                loss = self.criterion(student_pack, teacher_pack)
 
-                # Backward
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
+                # Logging
                 epoch_loss += loss.item()
+                pbar.set_postfix({"Loss": loss.item()})
+                
+                if self.cfg.use_wandb:
+                    wandb.log({"train_loss": loss.item()})
 
-                if i % self.cfg.train.log_every == 0:
-                    wandb.log({
-                        "loss": loss.item(),
-                        "feat_loss": loss.item() * self.cfg.train.feature_loss_weight,
-                        "mask_loss": loss.item() * (1 - self.cfg.train.feature_loss_weight)
-                    })
+            # Save Checkpoint
+            torch.save(self.student.state_dict(), f"{self.cfg.paths.checkpoints}/student_distilled_epoch{epoch}.pth")
+            print(f"Epoch {epoch} complete. Loss: {epoch_loss / len(self.train_loader):.4f}")
 
-            print(f"Epoch {epoch} Loss: {epoch_loss / len(self.train_loader):.4f}")
-            torch.save(self.student.state_dict(), f"{self.cfg.paths.checkpoints}/minisam_epoch{epoch}.pth")
+    def collate_fn(self, batch):
+        # Simple helper to keep list structure for the Processor
+        return {
+            "image": [item["image"] for item in batch],
+            "prompt": [item["prompt"] for item in batch], # Points
+            "mask": [item["mask"] for item in batch]
+        }
