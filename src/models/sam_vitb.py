@@ -1,51 +1,39 @@
 # Student model (ViT-B + SAM head)
-# src/models/sam_vitb.py
+
 import torch
 import torch.nn as nn
-from segment_anything import sam_model_registry
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from transformers import BitsAndBytesConfig
+from transformers import SamModel, SamConfig
 
-class QLoRAMiniSAM(nn.Module):
-    def __init__(self, cfg):
+class StudentSAM(nn.Module):
+    def __init__(self, model_name="facebook/sam-vit-base"):
         super().__init__()
-        # 4-bit quantization config
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
+        print(f"Initializing Dense Student Model: {model_name}")
+        
+        # Load standard ViT-B from HuggingFace
+        # This is NOT quantized yet. It is FP32/BF16 and fully trainable.
+        self.model = SamModel.from_pretrained(model_name)
+        
+        # Enable gradients for all parameters (Full Fine-Tuning/Distillation)
+        for param in self.model.parameters():
+            param.requires_grad = True
+
+    def forward(self, pixel_values, input_points=None, input_boxes=None, input_labels=None):
+        # Pass inputs to the HuggingFace model
+        outputs = self.model(
+            pixel_values=pixel_values,
+            input_points=input_points,
+            input_boxes=input_boxes,
+            input_labels=input_labels,
+            multimask_output=False # We usually want single mask for medical ground truth
         )
-
-        # Load ViT-B with 4-bit
-        self.sam = sam_model_registry["vit_b"](
-            checkpoint=cfg.sam.vit_b_checkpoint,
-            quantization_config=quantization_config
-        )
-
-        # Prepare for QLoRA
-        self.sam = prepare_model_for_kbit_training(self.sam)
-
-        # LoRA config
-        lora_config = LoraConfig(
-            r=cfg.lora.r,
-            lora_alpha=cfg.lora.alpha,
-            target_modules=cfg.lora.target_modules,
-            lora_dropout=cfg.lora.dropout,
-            bias="none",
-            modules_to_save=["mask_decoder"]  # keep decoder in FP16
-        )
-
-        # Apply LoRA
-        self.sam = get_peft_model(self.sam, lora_config)
-
-        # Freeze prompt encoder & mask decoder (except saved)
-        for name, param in self.sam.named_parameters():
-            if "prompt_encoder" in name or ("mask_decoder" in name and "modules_to_save" not in name):
-                param.requires_grad = False
-
-    def forward(self, image, prompt):
-        return self.sam(image, **prompt)
-
-    def get_image_features(self, image):
-        return self.sam.image_encoder(image)
+        
+        # Return a dictionary for the Loss function
+        return {
+            'pred_masks': outputs.pred_masks,
+            'iou_scores': outputs.iou_scores,
+            'vision_features': outputs.vision_features # HF SamModel usually returns this only if configured
+        }
+    
+    def get_vision_features(self, pixel_values):
+        # Helper to extract features explicitly
+        return self.model.vision_encoder(pixel_values).last_hidden_state
