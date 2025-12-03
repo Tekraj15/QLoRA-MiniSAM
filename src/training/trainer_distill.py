@@ -16,19 +16,28 @@ class DistillationTrainer:
         self.student = student_model.to(self.device)
         self.student.train()
 
-        # 2. Setup Teacher (Frozen, 4-bit NF4), and ensure it uses the QLoRA memory saving trick
-        print("Loading Teacher (ViT-H) in 4-bit NF4...")
-        nf4_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
-        self.teacher = SamModel.from_pretrained(
-            "facebook/sam-vit-huge",
-            quantization_config=nf4_config,
-            device_map=self.device
-        )
+        # 2. Setup Teacher (Frozen)
+        # Check if CUDA is available for 4-bit quantization
+        if torch.cuda.is_available():
+            print("CUDA detected. Loading Teacher (ViT-H) in 4-bit NF4...")
+            nf4_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.bfloat16
+            )
+            self.teacher = SamModel.from_pretrained(
+                "facebook/sam-vit-huge",
+                quantization_config=nf4_config,
+                device_map=self.device
+            )
+        else:
+            print(f"CUDA not detected (Device: {self.device}). Loading Teacher (ViT-H) in full precision...")
+            # On MPS/CPU, we cannot use 4-bit quantization from bitsandbytes
+            self.teacher = SamModel.from_pretrained(
+                "facebook/sam-vit-huge"
+            ).to(self.device)
+        
         self.teacher.eval() # Freeze teacher
 
         # 3. Processor (Handles resizing to 1024x1024 and Norm)
@@ -112,9 +121,11 @@ class DistillationTrainer:
                 if self.cfg.use_wandb:
                     wandb.log({"train_loss": loss.item()})
 
-            # Save Checkpoint
-            torch.save(self.student.state_dict(), f"{self.cfg.paths.checkpoints}/student_distilled_epoch{epoch}.pth")
-            print(f"Epoch {epoch} complete. Loss: {epoch_loss / len(self.train_loader):.4f}")
+            # Save Checkpoint (HF Format for Phase 2)
+            save_path = f"{self.cfg.paths.checkpoints}/distilled_student_epoch{epoch}"
+            self.student.save_pretrained(save_path)
+            self.processor.save_pretrained(save_path) # Save processor too for completeness
+            print(f"Epoch {epoch} complete. Saved to {save_path}. Loss: {epoch_loss / len(self.train_loader):.4f}")
 
     def collate_fn(self, batch):
         # Simple helper to keep list structure for the Processor
