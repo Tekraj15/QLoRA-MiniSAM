@@ -34,4 +34,4 @@ tqdm>=4.66.0
 
 # --- Dev Tools ---
 jupyter>=1.0.0
-ipykernel>=6.25.0er
+ipykernel>=6.25.0
