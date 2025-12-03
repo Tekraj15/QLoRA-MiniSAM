@@ -1,15 +1,34 @@
+# config/default.yaml
 defaults:
-  - data: cosmo
-  - model: sam
-  - eval: baseline
   - _self_
 
-project:
-  name: "lora_minisam"
-  seed: 42
+train:
+  device: "mps" # Use "cuda" for NVIDIA GPUs, "mps" for Mac, "cpu" for others
+  epochs: 10
+  batch_size: 4 # Keep small for ViT + QLoRA
+  lr: 1e-4
+  weight_decay: 0.01
+  feature_loss_weight: 0.7
+  temperature: 4.0
+  log_every: 10
+
+qlora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  quantization:
+    load_in_4bit: True
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "float16"
+    bnb_4bit_use_double_quant: True
 
 paths:
-  root: $$ {oc.env:PROJECT_ROOT, $${hydra:runtime.cwd}}
-  data: ${paths.root}/data/cosmo1050k
-  checkpoints: ${paths.root}/checkpoints
-  outputs: ${paths.root}/outputs
+  # Where to save the output of Phase 1
+  distilled_checkpoint: "./checkpoints/distilled_student" 
+  checkpoints: "./checkpoints"
+  data_root: "./data/COSMOS-1050K"
+
+dataset:
+  modality: "CT" # Change to MRI or US for other runs
+
+use_wandb: True
