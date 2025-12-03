@@ -1,7 +1,7 @@
 MODALITY=$1
 EPOCH=${2:-final}
 
-python src/inference/adapter_inference.py \
+PYTHONPATH=. python src/inference/adapter_inference.py \
   inference.modality=$MODALITY \
   inference.adapter_path="checkpoints/qlora_${MODALITY}_epoch${EPOCH}.pt" \
   dataset.split=valid \
