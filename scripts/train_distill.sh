@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/train_distill.sh
-python src/training/trainer_distill.py \
+PYTHONPATH=. python src/training/trainer_distill.py \
   train=distill \
   dataset.split=train \
   dataset.modality=CT \
