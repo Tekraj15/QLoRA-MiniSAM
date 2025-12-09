@@ -18,6 +18,8 @@ class DistillationTrainer:
         # 1. Setup Student (Dense, Trainable)
         self.student = student_model.to(self.device)
         self.student.train()
+        # Enable Gradient Checkpointing to save memory
+        self.student.model.gradient_checkpointing_enable()
 
         # 2. Setup Teacher (Frozen)
         # Check if CUDA is available
