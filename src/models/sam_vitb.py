@@ -37,3 +37,7 @@ class StudentSAM(nn.Module):
     def get_vision_features(self, pixel_values):
         # Helper to extract features explicitly
         return self.model.vision_encoder(pixel_values).last_hidden_state
+
+    def save_pretrained(self, save_directory):
+        """Delegates saving to the underlying HuggingFace model."""
+        self.model.save_pretrained(save_directory)

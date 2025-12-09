@@ -15,15 +15,14 @@ qlora:
 
 paths:
   # Where to save the output of Phase 1
-  distilled_checkpoint: "./checkpoints/distilled_student" 
+  distilled_checkpoint: "./checkpoints/distilled_student_epoch1" 
   checkpoints: "./checkpoints"
   data_root: "./data/cosmos1050k"
-  data: ${paths.data_root}
 
 dataset:
   modality: "CT" # Change to MRI or US for other runs
   split: "train"
-  size: 1024
-  prompt_type: "point"
+  size: 256
+  prompt_type: "box"
 
-use_wandb: True
+use_wandb: False

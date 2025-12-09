@@ -1,0 +1,6 @@
+mode: "qlora"
+epochs: 20
+batch_size: 2 # Default to small for safety, user can override
+lr: 2e-4
+device: "cuda"
+weight_decay: 0.01

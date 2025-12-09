@@ -1,9 +1,9 @@
-train:
-  mode: "distill"
-  epochs: 50
-  batch_size: 8
-  lr: 1e-4
-  weight_decay: 0.01
-  feature_loss_weight: 0.7
-  log_every: 100
-  device: "cuda"
+mode: "distill"
+epochs: 50
+batch_size: 1
+lr: 1e-4
+weight_decay: 0.01
+feature_loss_weight: 0.7
+log_every: 100
+device: "cuda"
+temperature: 4.0

@@ -1,0 +1,9 @@
+# config/train/default.yaml
+device: "cuda" # Use "cuda" for NVIDIA GPUs, "mps" for Mac, "cpu" for others
+epochs: 10
+batch_size: 1 # Keep small for ViT + QLoRA
+lr: 1e-4
+weight_decay: 0.01
+feature_loss_weight: 0.7
+temperature: 4.0
+log_every: 10
