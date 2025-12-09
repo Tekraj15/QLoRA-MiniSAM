@@ -1,6 +1,7 @@
 import wandb
 import logging
 from datetime import datetime
+from omegaconf import OmegaConf
 
 def get_logger(name: str):
     logger = logging.getLogger(name)

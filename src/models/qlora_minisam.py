@@ -10,9 +10,13 @@ class QLoRAMiniSAM(nn.Module):
         self.cfg = cfg
         
         # 1. Define 4-bit NF4 Config (The "Q" in QLoRA)
+        # 1. Define 4-bit NF4 Config (The "Q" in QLoRA)
         bnb_config = None
-        if torch.cuda.is_available():
-            print("CUDA detected. Using 4-bit NF4 quantization...")
+        # Check if 4-bit loading is requested IN ADDITION to CUDA availability
+        use_4bit = cfg.qlora.quantization.load_in_4bit and torch.cuda.is_available()
+        
+        if use_4bit:
+            print("CUDA detected and 4-bit requested. Using 4-bit NF4 quantization...")
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
@@ -20,7 +24,8 @@ class QLoRAMiniSAM(nn.Module):
                 bnb_4bit_compute_dtype=torch.bfloat16
             )
         else:
-            print(f"CUDA not detected (Device: {cfg.train.device}). Using full precision (LoRA only)...")
+            print(f"Skipping 4-bit quantization (Requested: {cfg.qlora.quantization.load_in_4bit}, CUDA: {torch.cuda.is_available()}). Using standard LoRA...")
+
 
         print(f"Loading Distilled Student from: {cfg.paths.distilled_checkpoint}")
         
@@ -28,8 +33,9 @@ class QLoRAMiniSAM(nn.Module):
         
         self.model = SamModel.from_pretrained(
             cfg.paths.distilled_checkpoint, # Path to your local best_student folder
-            quantization_config=bnb_config,
-            device_map=cfg.train.device if torch.cuda.is_available() else None # MPS doesn't like device_map="auto" sometimes
+            quantization_config=bnb_config, # None if use_4bit is False
+            torch_dtype=torch.float16 if not use_4bit else None, # Force float16 if standard LoRA
+            device_map=cfg.train.device if torch.cuda.is_available() else None 
         )
         
         if not torch.cuda.is_available():
@@ -50,10 +56,10 @@ class QLoRAMiniSAM(nn.Module):
         lora_config = LoraConfig(
             r=cfg.qlora.r,
             lora_alpha=cfg.qlora.alpha,
-            target_modules=["q_proj", "v_proj"], 
+            target_modules=["qkv", "q_proj", "v_proj"], 
             lora_dropout=cfg.qlora.dropout,
             bias="none",
-            modules_to_save=["mask_decoder"] # fully fine-tune the decoder
+            modules_to_save=[] # Remove mask_decoder to avoid wrapper conflicts; use LoRA instead
         )
 
         # 5. Inject Adapters
@@ -72,3 +78,29 @@ class QLoRAMiniSAM(nn.Module):
     def save_adapter(self, path):
         # Saves only the LoRA weights (few MBs)
         self.model.save_pretrained(path)
+        
+    @classmethod
+    def load_adapter(cls, cfg, path, modality):
+        """
+        Loads the base model + specific adapter for inference
+        """
+        # 1. Initialize Base Model (Empty LoRA)
+        # Force 4-bit off for inference unless specified otherwise
+        # Usually inference is done in float16 or float32 for stability
+        if not hasattr(cfg, 'qlora'):
+             # Create dummy qlora config if missing (since we need it for __init__)
+             from omegaconf import OmegaConf, open_dict
+             with open_dict(cfg):
+                 cfg.qlora = OmegaConf.create({
+                     "quantization": {"load_in_4bit": False},
+                     "r": 16, "alpha": 32, "dropout": 0.05
+                 })
+             
+        instance = cls(cfg)
+        
+        # 2. Load the Adapter
+        print(f"Loading Adapter for {modality} from {path}...")
+        instance.model.load_adapter(path, adapter_name=modality)
+        instance.model.set_adapter(modality)
+        
+        return instance

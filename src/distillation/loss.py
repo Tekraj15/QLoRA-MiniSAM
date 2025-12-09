@@ -22,7 +22,8 @@ class DistillationLoss(nn.Module):
         # 1. Feature Distillation (Image Encoder Embeddings)
         # Assume the trainer extracts the image embeddings (B, 256, 64, 64)
         s_feat = student_outputs['vision_features']
-        t_feat = teacher_outputs['vision_features']
+        # Cast Teacher features to Student's dtype (float32) to avoid Half/Float mismatch in backward
+        t_feat = teacher_outputs['vision_features'].to(dtype=s_feat.dtype)
         
         # Normalize features for stability (Cosine Similarity via MSE)
         s_feat_norm = F.normalize(s_feat, dim=1)
@@ -32,9 +33,15 @@ class DistillationLoss(nn.Module):
         # 2. Mask Distillation (Logits)
         # Using the first mask (index 0) which is usually the most confident for unambiguous prompts
         s_masks = student_outputs['pred_masks'][:, 0, :, :] # (B, H, W)
-        t_masks = teacher_outputs['pred_masks'][:, 0, :, :]
+        # Cast Teacher masks to Student's dtype
+        t_masks = teacher_outputs['pred_masks'][:, 0, :, :].to(dtype=s_masks.dtype)
 
         # Flatten for KL Div
+        # s_masks is (B, 1, H, W) -> squeeze channel dim if present
+        if len(s_masks.shape) == 4:
+             s_masks = s_masks.squeeze(1)
+             t_masks = t_masks.squeeze(1)
+
         B, H, W = s_masks.shape
         s_logits = s_masks.view(B, -1) / self.T
         t_logits = t_masks.view(B, -1) / self.T

@@ -6,6 +6,9 @@ from torch.utils.data import DataLoader
 from transformers import SamProcessor, SamModel, BitsAndBytesConfig
 from src.distillation.loss import DistillationLoss
 from src.utils.logger import init_wandb
+import hydra
+from src.models.sam_vitb import StudentSAM
+from data.cosmos1050k.data_loader import COSMOSDataset
 
 class DistillationTrainer:
     def __init__(self, cfg, student_model, train_dataset):
@@ -17,25 +20,21 @@ class DistillationTrainer:
         self.student.train()
 
         # 2. Setup Teacher (Frozen)
-        # Check if CUDA is available for 4-bit quantization
+        # Check if CUDA is available
         if torch.cuda.is_available():
-            print("CUDA detected. Loading Teacher (ViT-H) in 4-bit NF4...")
-            nf4_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16
-            )
+            print("CUDA detected. Loading Teacher (ViT-B) in float16 (Windows compatibility)...")
+            # Disable 4-bit for now due to bitsandbytes issues on Windows
+            # Use float16 to save memory (ViT-B is smallest)
             self.teacher = SamModel.from_pretrained(
-                "facebook/sam-vit-huge",
-                quantization_config=nf4_config,
-                device_map=self.device
+                "facebook/sam-vit-base",
+                device_map=self.device,
+                torch_dtype=torch.float16
             )
         else:
-            print(f"CUDA not detected (Device: {self.device}). Loading Teacher (ViT-H) in full precision...")
+            print(f"CUDA not detected (Device: {self.device}). Loading Teacher (ViT-B) in full precision...")
             # On MPS/CPU, we cannot use 4-bit quantization from bitsandbytes
             self.teacher = SamModel.from_pretrained(
-                "facebook/sam-vit-huge"
+                "facebook/sam-vit-base"
             ).to(self.device)
         
         self.teacher.eval() # Freeze teacher
@@ -72,22 +71,38 @@ class DistillationTrainer:
             
             for batch in pbar:
                 # Prepare inputs using Processor (handles batching of lists)
-                # Assuming dataset returns raw images/points
+                # Parse prompts from dataset dicts
+                prompts = batch["prompt"]
+                input_boxes = None
+                input_points = None
+                
+                if prompts[0]["type"] == "box":
+                    # SAM expects list of list of list for boxes: (batch, num_boxes, 4)
+                    # We have 1 box per image, so we wrap it in a list
+                    input_boxes = [[p["box"]] for p in prompts]
+                elif prompts[0]["type"] == "point":
+                    # SAM expects list of list of list for points: (batch, num_points, 2)
+                    input_points = [[[p["coord"]]] for p in prompts]
+
                 inputs = self.processor(
                     batch["image"], 
-                    input_points=batch["prompt"], 
+                    input_points=input_points,
+                    input_boxes=input_boxes,
                     return_tensors="pt"
                 ).to(self.device)
 
                 # --- Teacher Forward (Frozen) ---
                 with torch.no_grad():
+                    # Cast inputs to teacher's dtype (float16) for the teacher forward pass
+                    teacher_inputs = {k: v.to(dtype=self.teacher.dtype) if torch.is_floating_point(v) else v 
+                                      for k, v in inputs.items()}
+                    
                     t_outputs = self.teacher(
-                        pixel_values=inputs.pixel_values,
-                        input_points=inputs.input_points,
-                        multimask_output=False
+                        multimask_output=False,
+                        **teacher_inputs
                     )
                     # Explicitly get features if not in output (depends on HF version)
-                    t_features = self.teacher.vision_encoder(inputs.pixel_values).last_hidden_state
+                    t_features = self.teacher.vision_encoder(teacher_inputs["pixel_values"]).last_hidden_state
                     
                     teacher_pack = {
                         'pred_masks': t_outputs.pred_masks,
@@ -95,10 +110,10 @@ class DistillationTrainer:
                     }
 
                 # --- Student Forward (Trainable) ---
+                # Student is float32 (default), so use original inputs
                 s_outputs = self.student.model(
-                    pixel_values=inputs.pixel_values,
-                    input_points=inputs.input_points,
-                    multimask_output=False
+                    multimask_output=False,
+                    **inputs
                 )
                 s_features = self.student.model.vision_encoder(inputs.pixel_values).last_hidden_state
                 
@@ -134,3 +149,20 @@ class DistillationTrainer:
             "prompt": [item["prompt"] for item in batch], # Points
             "mask": [item["mask"] for item in batch]
         }
+
+@hydra.main(config_path="../../config", config_name="default", version_base="1.3")
+def main(cfg):
+    # 1. Dataset
+    dataset = COSMOSDataset(cfg)
+    
+    # 2. Student Model
+    student = StudentSAM()
+    
+    # 3. Trainer
+    trainer = DistillationTrainer(cfg, student, dataset)
+    
+    # 4. Train
+    trainer.train()
+
+if __name__ == "__main__":
+    main()
