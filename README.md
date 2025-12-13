@@ -32,9 +32,50 @@ This design yields a **deployable foundation model** for MIS i.e., it enables
 Being Evaluated on the COSMOS-1050K benchmark [Huang et al., 2024], QLoRA-MiniSAM targets 4–6% Dice improvement over zero-shot SAM with <5M trainable parameters, <10 GFLOPs per forward pass, and >70% reduction in memory via 4-bit quantization, making it a practical, deployable foundation model for clinical MIS.
 
 
-## Detailed Methodology
-# 1. Architecture Overview
+## Detailed Architecture & Implementation
 
+
+### 1. Core Components
+
+#### A. Models (`src/models/`)
+*   **`StudentSAM` (`sam_vitb.py`)**: 
+    *   Wraps the standard `facebook/sam-vit-base` model from Hugging Face.
+    *   Initialized as a dense (FP32/BF16) model for Phase 1 distillation.
+    *   All parameters are trainable during the distillation phase.
+*   **`QLoRAMiniSAM` (`qlora_minisam.py`)**:
+    *   Wraps the **distilled** student model for Phase 2.
+    *   **Quantization**: Conditionally applies 4-bit NF4 quantization (via `BitsAndBytesConfig`) if CUDA is available. On CPU/MPS, it keeps the model in full precision (Float32/Float16).
+    *   **LoRA Injection**: Injects Low-Rank Adapters (`LoraConfig`) into the Attention layers (`qkv`, `q_proj`, `v_proj`) of the Vision Transformer.
+    *   **Freezing**: Freezes the base model weights, training *only* the LoRA adapters (reducing trainable parameters to <5%).
+
+#### B. Training Workflow (`src/training/`)
+
+**Phase 1: Knowledge Distillation (`trainer_distill.py`)**
+1.  **Teacher Setup**: Loads `facebook/sam-vit-base` (or ViT-H) as the frozen teacher.
+2.  **Student Setup**: Initializes `StudentSAM` (ViT-B).
+3.  **Forward Pass**: Passes the same image to both Teacher and Student.
+4.  **Loss Calculation** (`src/distillation/loss.py`):
+    *   **Feature Loss**: MSE loss between the normalized image embeddings of Teacher and Student.
+    *   **Mask Loss**: KL Divergence between the softened logits of the predicted masks.
+    *   `Total Loss = alpha * FeatureLoss + (1-alpha) * MaskLoss`
+5.  **Output**: Saves the distilled student weights using `save_pretrained`.
+
+**Phase 2: QLoRA Fine-Tuning (`trainer_qlora.py`)**
+1.  **Model Loading**: Loads the *distilled* student from Phase 1 into `QLoRAMiniSAM`.
+2.  **Adaptation**: Applies 4-bit quantization (if GPU) and injects LoRA adapters.
+3.  **Training**: Fine-tunes *only* the adapters on the specific medical modality (e.g., CT, MRI).
+4.  **Loss Calculation**: Uses `MedSegLoss` (Combination of Binary Cross Entropy and Dice Loss) against the ground truth segmentation masks.
+
+### 3. Configuration (`config/`)
+The project uses **Hydra** for configuration management.
+*   **`default.yaml`**: Sets global defaults (paths, wandb, etc.).
+*   **`train/default.yaml`**: Defines default training hyperparameters (lr, batch_size, device).
+*   **`train/distill.yaml`**: Overrides for distillation (e.g., higher epochs, specific loss weights).
+*   **`train/qlora.yaml`**: Overrides for QLoRA (e.g., LoRA rank `r`, alpha).
+
+You can override any parameter from the command line, e.g., `train.device=cuda`.
+
+### 2. Architecture/Flow Diagram
 
 ```mermaid
 flowchart TD
@@ -65,7 +106,7 @@ flowchart TD
     style D fill:#66bb6a,stroke:#2e7d32,stroke-width:2px
 ```
 
-# 2. Training Workflow:
+# 3. Training Workflow:
 
 
 ```mermaid
@@ -77,10 +118,11 @@ flowchart LR
     C --"Embeddings"--> D
     D --> C
     end
-    
-    subgraph Phase 2: QLoRA Fine-Tuning
-    C --> E["Distilled ViT-B<br/>(Frozen 4-bit NF4)"]
-    E --> F["+ LoRA Adapters<br/>(Trainable)"]
-    F --> G["Task Loss (Dice/Focal)"]
+
+    subgraph Phase 2: QLoRA
+    D[Distilled Student] --> Q[Quantize (4-bit)]
+    Q --> A[Inject LoRA Adapters]
+    A --> F[Fine-Tune on Medical Data]
+    F --> O[Optimized Medical SAM]
     end
 ```
