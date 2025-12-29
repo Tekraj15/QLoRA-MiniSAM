@@ -107,8 +107,6 @@ flowchart TD
 ```
 
 # 3. Training Workflow:
-
-
 ```mermaid
 flowchart LR
     subgraph Phase 1: Knowledge Distillation
@@ -120,9 +118,9 @@ flowchart LR
     end
 
     subgraph Phase 2: QLoRA
-    D[Distilled Student] --> Q[Quantize (4-bit)]
-    Q --> A[Inject LoRA Adapters]
-    A --> F[Fine-Tune on Medical Data]
-    F --> O[Optimized Medical SAM]
+    D["Distilled Student"] --> Q["Quantize (4-bit)"]
+    Q --> A["Inject LoRA Adapters"]
+    A --> F["Fine-Tune on Medical Data"]
+    F --> O["Optimized Medical SAM"]
     end
 ```
