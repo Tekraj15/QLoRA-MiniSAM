@@ -2,11 +2,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys
+import os
+
+# Add project root to sys.path to allow running script directly
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import SamProcessor
 from src.models.qlora_minisam import QLoRAMiniSAM
-from data.cosmos1050k.data_loader import COSMOSDataset 
+from src.models.qlora_minisam import QLoRAMiniSAM
 import wandb
 import hydra
 from omegaconf import DictConfig
@@ -38,16 +44,46 @@ class QLoRATrainer:
     def __init__(self, cfg):
         self.cfg = cfg
         self.device = cfg.train.device
-
+        
+        
+        
         # 1. Dataset & Processor
+
         # We need the processor to handle resizing to 1024x1024
         self.processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
         
-        dataset = COSMOSDataset(cfg) # Ensure this yields raw images
-        self.loader = DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=self.collate_fn)
+        if cfg.dataset.name == "cosmo1050k":
+             from data.cosmos1050k.data_loader import COSMOSDataset
+             dataset = COSMOSDataset(cfg)
+        elif cfg.dataset.name == "lits":
+             from data.LiTS.data_loader import LiTSDataset
+             dataset = LiTSDataset(cfg)
+        else:
+             raise ValueError(f"Unknown dataset: {cfg.dataset.name}")
+        self.loader = DataLoader(
+            dataset, 
+            batch_size=cfg.train.batch_size, 
+            shuffle=True, 
+            collate_fn=QLoRATrainer.collate_fn, # Use static method
+            num_workers=cfg.train.get("num_workers", 0),
+            pin_memory=True if torch.cuda.is_available() else False
+        )
 
         # 2. Model (Loads Distilled Weights + LoRA)
         self.model = QLoRAMiniSAM(cfg).to(self.device)
+        
+        print(f"--- Device Check (Post-Model Load) ---")
+        print(f"Configured Device: {self.device}")
+        if torch.cuda.is_available():
+            print(f"CUDA Available: True")
+            print(f"Current Device Index: {torch.cuda.current_device()}")
+            print(f"Device Name: {torch.cuda.get_device_name(0)}")
+            print(f"Memory Allocated: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
+            print(f"Memory Reserved: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
+        else:
+            print("CUDA Available: False (Using CPU)")
+        print(f"--------------------")
+
         
         # 3. Optimizer
         self.optimizer = torch.optim.AdamW(
@@ -121,6 +157,10 @@ class QLoRATrainer:
                 # Backward
                 self.optimizer.zero_grad()
                 loss.backward()
+                
+                # Gradient Clipping to prevent exploding gradients (common in SAM)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
                 self.optimizer.step()
 
                 # Logging
@@ -137,7 +177,8 @@ class QLoRATrainer:
             # Save Adapter
             self.model.save_adapter(f"{self.cfg.paths.checkpoints}/qlora_{self.cfg.dataset.modality}_epoch{epoch}")
 
-    def collate_fn(self, batch):
+    @staticmethod
+    def collate_fn(batch):
         return {
             "image": [item["image"] for item in batch],
             "prompt": [item["prompt"] for item in batch],

@@ -11,7 +11,13 @@ class LiTSDataset(Dataset):
     def __init__(self, cfg):
         self.cfg = cfg
         self.split = cfg.dataset.split # 'train', 'val', 'test'
-        self.data_root = Path(cfg.paths.data_root) / "LITS_PROCESSED"
+        # Use dataset path if available, else global path
+        if "paths" in cfg.dataset and "data_root" in cfg.dataset.paths:
+             droot = cfg.dataset.paths.data_root
+        else:
+             droot = cfg.paths.data_root
+             
+        self.data_root = Path(droot) / "LITS_PROCESSED"
         
         self.img_dir = self.data_root / "images"
         self.lbl_dir = self.data_root / "labels"
@@ -48,7 +54,10 @@ class LiTSDataset(Dataset):
 
         all_files = sorted(list(self.img_dir.glob("*.png")))
         
-        for fpath in all_files:
+        # Add tqdm for progress since we are opening files
+        from tqdm import tqdm
+        
+        for fpath in tqdm(all_files, desc="Filtering Tumor Slices"):
             # Extract patient ID
             # vol_10_slice_005.png -> 10
             try:
@@ -58,7 +67,14 @@ class LiTSDataset(Dataset):
                 pid = int(parts[1])
                 
                 if pid in self.patient_ids:
-                    self.samples.append(fpath)
+                    # Check if mask has tumor (label 2)
+                    lbl_path = self.lbl_dir / fname
+                    mask = np.array(Image.open(lbl_path))
+                    
+                    # We are configuring dataset for TUMOR segmentation (label 2)
+                    # Use prompt_type config check if strictly needed, but let's assume tumor logic for now.
+                    if 2 in mask:
+                         self.samples.append(fpath)
             except Exception:
                 continue
 
