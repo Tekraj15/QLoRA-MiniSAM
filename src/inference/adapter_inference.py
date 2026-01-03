@@ -3,7 +3,6 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import OmegaConf
 from src.models.qlora_minisam import QLoRAMiniSAM
-from data.cosmos1050k.data_loader import COSMOSDataset
 from src.utils.metrics import dice_score
 from src.utils.viz import visualize_prediction
 from torch.utils.data import DataLoader
@@ -15,7 +14,7 @@ cs = ConfigStore.instance()
 cs.store(name="adapter_inference", node={
     "defaults": [
         "_self_",
-        {"data": "cosmo"},
+        {"dataset": "cosmo"},
         {"model": "qlora"},
         {"inference": "adapter"}
     ],
@@ -24,7 +23,7 @@ cs.store(name="adapter_inference", node={
         "distilled_checkpoint": "./checkpoints/distilled_student_epoch1", # Required for loading base model
         "data_root": "./data/cosmos1050k"
     }, 
-    "dataset": {"split": "valid", "modality": "all", "size": 256, "prompt_type": "box"}, 
+    # "dataset": {"split": "valid", "modality": "all", "size": 256, "prompt_type": "box"}, 
     "train": {"device": "cuda"}, # Add train config for device access
     "inference": {
         "modality": "???",
@@ -52,7 +51,15 @@ def main(cfg):
     model.eval()
 
     # Load Dataset
-    dataset = COSMOSDataset(cfg)
+    # Load Dataset
+    if cfg.dataset.name == "cosmo1050k":
+         from data.cosmos1050k.data_loader import COSMOSDataset
+         dataset = COSMOSDataset(cfg)
+    elif cfg.dataset.name == "lits":
+         from data.LiTS.data_loader import LiTSDataset
+         dataset = LiTSDataset(cfg)
+    else:
+         raise ValueError(f"Unknown dataset: {cfg.dataset.name}")
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
     results = []

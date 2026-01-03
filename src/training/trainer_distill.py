@@ -1,6 +1,12 @@
 # Training loop with teacher-student
 import torch
 import wandb
+import sys
+import os
+
+# Add project root to sys.path to allow running script directly
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from transformers import SamProcessor, SamModel, BitsAndBytesConfig
@@ -9,6 +15,14 @@ from src.utils.logger import init_wandb
 import hydra
 from src.models.sam_vitb import StudentSAM
 from data.cosmos1050k.data_loader import COSMOSDataset
+
+def get_dataset(cfg):
+    if cfg.dataset.name == "lits":
+        from data.LiTS.data_loader import LiTSDataset
+        return LiTSDataset(cfg)
+    else:
+        return COSMOSDataset(cfg)
+
 
 class DistillationTrainer:
     def __init__(self, cfg, student_model, train_dataset):
@@ -24,25 +38,25 @@ class DistillationTrainer:
         # 2. Setup Teacher (Frozen)
         # Check if CUDA is available
         if torch.cuda.is_available():
-            print("CUDA detected. Loading Teacher (ViT-B) in float16 (Windows compatibility)...")
+            print("CUDA detected. Loading Teacher (ViT-H) in float16 (Windows compatibility)...")
             # Disable 4-bit for now due to bitsandbytes issues on Windows
-            # Use float16 to save memory (ViT-B is smallest)
+            # Use float16 to save memory (ViT-H is large)
             self.teacher = SamModel.from_pretrained(
-                "facebook/sam-vit-base",
+                "facebook/sam-vit-huge",
                 device_map=self.device,
                 torch_dtype=torch.float16
             )
         else:
-            print(f"CUDA not detected (Device: {self.device}). Loading Teacher (ViT-B) in full precision...")
+            print(f"CUDA not detected (Device: {self.device}). Loading Teacher (ViT-H) in full precision...")
             # On MPS/CPU, we cannot use 4-bit quantization from bitsandbytes
             self.teacher = SamModel.from_pretrained(
-                "facebook/sam-vit-base"
+                "facebook/sam-vit-huge"
             ).to(self.device)
         
         self.teacher.eval() # Freeze teacher
 
         # 3. Processor (Handles resizing to 1024x1024 and Norm)
-        self.processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+        self.processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
 
         # 4. Optimization
         self.criterion = DistillationLoss(
@@ -62,7 +76,8 @@ class DistillationTrainer:
             collate_fn=self.collate_fn # Use custom collator if needed
         )
         
-        init_wandb(cfg)
+        if cfg.use_wandb:
+            init_wandb(cfg)
 
     def train(self):
         print("Starting Distillation Phase...")
@@ -155,16 +170,30 @@ class DistillationTrainer:
 @hydra.main(config_path="../../config", config_name="default", version_base="1.3")
 def main(cfg):
     # 1. Dataset
-    dataset = COSMOSDataset(cfg)
+    dataset = get_dataset(cfg)
     
     # 2. Student Model
     student = StudentSAM()
+    
+    if cfg.get("resume_checkpoint"):
+        print(f"Resuming from checkpoint: {cfg.resume_checkpoint}")
+        # Load weights into the underlying SamModel
+        # We need to be careful if config architecture matches, but usually fine for same model type
+        student.model = SamModel.from_pretrained(cfg.resume_checkpoint)
+
     
     # 3. Trainer
     trainer = DistillationTrainer(cfg, student, dataset)
     
     # 4. Train
     trainer.train()
+    
+    # 5. Save Final Checkpoint (Deterministic name for chaining)
+    final_path = f"{cfg.paths.checkpoints}/distilled_student_final"
+    student.save_pretrained(final_path)
+    trainer.processor.save_pretrained(final_path)
+    print(f"Final checkpoint saved to {final_path}")
+
 
 if __name__ == "__main__":
     main()

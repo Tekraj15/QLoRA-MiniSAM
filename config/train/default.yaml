@@ -1,9 +1,12 @@
 # config/train/default.yaml
 device: "cuda" # Use "cuda" for NVIDIA GPUs, "mps" for Mac, "cpu" for others
+mode: "distill"
 epochs: 10
-batch_size: 1 # Keep small for ViT + QLoRA
+batch_size: 8 # Increased to utilize GPU (was 1)
 lr: 1e-4
 weight_decay: 0.01
 feature_loss_weight: 0.7
 temperature: 4.0
 log_every: 10
+num_workers: 4 # Number of subprocesses for data loading (0 = main process only)
+

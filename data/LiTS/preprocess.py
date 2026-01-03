@@ -22,8 +22,16 @@ def preprocess_lits(data_root, output_root, window_min=-200, window_max=200):
     # and "segmentations" folder exists. 
     # We'll look for volumes in data_root and segmentations in data_root/segmentations
     
-    vols_dir = raw_data_dir # User said "volume-X.nii files will be needed later, downloading in progress"
+    vols_dir = raw_data_dir 
     segs_dir = raw_data_dir / "segmentations"
+    
+    # Check for volume_pt6 or other subfolders if volumes are not in root
+    possible_vol_dirs = [raw_data_dir, raw_data_dir / "volumes", raw_data_dir / "volume_pt6"]
+    
+    
+    # Note: If volumes are split across multiple folders, we might need to search all.
+    # For now, let's keep the logic simple but robust to the user's current setup.
+
     
     out_img_dir = Path(output_root) / "images"
     out_lbl_dir = Path(output_root) / "labels"
@@ -46,10 +54,22 @@ def preprocess_lits(data_root, output_root, window_min=-200, window_max=200):
         vol_path = vols_dir / vol_name
         seg_path = segs_dir / seg_name
         
-        # Check if both exist
         if not vol_path.exists():
-            # Try looking in a 'volumes' subdir just in case
-            vol_path = vols_dir / "volumes" / vol_name
+            # Try looking in known subdirs
+            found = False
+            for d in possible_vol_dirs:
+                temp_path = d / vol_name
+                if temp_path.exists():
+                    vol_path = temp_path
+                    found = True
+                    break
+            
+            if not found:
+                # One last check: maybe recursively search? (expensive but useful)
+                # matches = list(raw_data_dir.rglob(vol_name))
+                # if matches:
+                #     vol_path = matches[0]
+                pass
             
         if not vol_path.exists() or not seg_path.exists():
             # print(f"Skipping Patient {pat_id}: Missing volume or segmentation")
@@ -90,9 +110,9 @@ def preprocess_lits(data_root, output_root, window_min=-200, window_max=200):
                 
                 # Segmentation is already 0, 1, 2. 
                 # 0: Background, 1: Liver, 2: Tumor
-                # We save it as is (uint8). 
+                # Save it as is (uint8). 
                 # Note: Some viewers might show this as black, but values are there.
-                mask = slice_seg.astype(np.uint8)txt
+                mask = slice_seg.astype(np.uint8)
                 
                 # Rotate if necessary (NIfTI is often rotated 90 deg relative to standard image view)
                 # Usually need to rotate 90 degrees counter-clockwise and flip

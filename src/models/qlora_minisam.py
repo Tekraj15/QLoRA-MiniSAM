@@ -34,7 +34,7 @@ class QLoRAMiniSAM(nn.Module):
         self.model = SamModel.from_pretrained(
             cfg.paths.distilled_checkpoint, # Path to your local best_student folder
             quantization_config=bnb_config, # None if use_4bit is False
-            torch_dtype=torch.float16 if not use_4bit else None, # Force float16 if standard LoRA
+            torch_dtype=torch.float32 if not use_4bit else None, # Use float32 for stability if not quantizing
             device_map=cfg.train.device if torch.cuda.is_available() else None 
         )
         
